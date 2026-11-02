@@ -1,5 +1,9 @@
 import ast
 import math
+import operator
+from collections.abc import Callable
+from numbers import Number
+from typing import Any
 
 from smolagents import tool
 
@@ -38,12 +42,38 @@ ALLOWED_NODES = (
     ast.UAdd,
 )
 
+# Resource limits. Python ints never overflow, so without these an expression such as
+# 10**10**8 or factorial(10**6) would keep the CPU busy for minutes and block the agent.
+MAX_RESULT_DIGITS = 4000  # stays below Python's 4300-digit int->str conversion limit
+MAX_COMBINATORIC_ARG = 10_000  # cap for factorial / comb / perm arguments
+_COMBINATORIC_FUNCS = frozenset({"factorial", "comb", "perm"})
+
+_BIN_OPS: dict[type[ast.operator], Callable[[Any, Any], Any]] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPS: dict[type[ast.unaryop], Callable[[Any], Any]] = {
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+class CalculationLimitError(ArithmeticError):
+    """Raised when a calculation would exceed the configured resource limits."""
+
 
 def _validate_ast(node: ast.AST) -> tuple[bool, str]:
     """Ensures expression AST contains only safe mathematical operations."""
     for child in ast.walk(node):
         if not isinstance(child, ALLOWED_NODES):
             return False, f"Disallowed syntax element: {type(child).__name__}"
+        if isinstance(child, ast.Constant) and not isinstance(child.value, Number):
+            return False, f"Disallowed non-numeric constant: {child.value!r}"
         if isinstance(child, ast.Name) and child.id not in SAFE_MATH:
             return False, f"Disallowed variable or identifier: '{child.id}'"
         if isinstance(child, ast.Call):  # noqa: SIM102
@@ -53,12 +83,64 @@ def _validate_ast(node: ast.AST) -> tuple[bool, str]:
     return True, ""
 
 
+def _int_digits(value: int) -> int:
+    """Upper-bound estimate of the number of decimal digits in ``value``."""
+    return int(abs(value).bit_length() * math.log10(2)) + 1
+
+
+def _check_result_size(value: Any) -> Any:
+    if isinstance(value, int) and _int_digits(value) > MAX_RESULT_DIGITS:
+        raise CalculationLimitError(f"result has more than {MAX_RESULT_DIGITS} digits")
+    return value
+
+
+def _check_binop(op: ast.operator, left: Any, right: Any) -> None:
+    """Reject integer operations whose result would be too large, before computing them."""
+    if not (isinstance(left, int) and isinstance(right, int)):
+        return  # float operations overflow quickly with OverflowError instead
+    if isinstance(op, ast.Pow) and right > 0 and abs(left) > 1:
+        if right * math.log10(abs(left)) > MAX_RESULT_DIGITS:
+            raise CalculationLimitError(f"result has more than {MAX_RESULT_DIGITS} digits")
+    elif (
+        isinstance(op, ast.Mult) and _int_digits(left) + _int_digits(right) > MAX_RESULT_DIGITS + 1
+    ):
+        raise CalculationLimitError(f"result has more than {MAX_RESULT_DIGITS} digits")
+
+
+def _evaluate(node: ast.AST) -> Any:
+    """Evaluate a validated expression AST without using ``eval``."""
+    if isinstance(node, ast.Expression):
+        return _evaluate(node.body)
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return SAFE_MATH[node.id]
+    if isinstance(node, ast.UnaryOp):
+        return _UNARY_OPS[type(node.op)](_evaluate(node.operand))
+    if isinstance(node, ast.BinOp):
+        left, right = _evaluate(node.left), _evaluate(node.right)
+        _check_binop(node.op, left, right)
+        return _check_result_size(_BIN_OPS[type(node.op)](left, right))
+    if isinstance(node, ast.Call):
+        name = node.func.id  # type: ignore[attr-defined]  # guaranteed by _validate_ast
+        args = [_evaluate(arg) for arg in node.args]
+        if name in _COMBINATORIC_FUNCS and any(
+            isinstance(a, Number) and abs(a) > MAX_COMBINATORIC_ARG for a in args
+        ):
+            raise CalculationLimitError(
+                f"{name}() arguments must not exceed {MAX_COMBINATORIC_ARG}"
+            )
+        return _check_result_size(SAFE_MATH[name](*args))  # type: ignore[operator]
+    raise ValueError(f"Unsupported syntax element: {type(node).__name__}")
+
+
 @tool
 def calculate(expression: str) -> str:
     """A safe mathematical calculator tool that evaluates arithmetic and mathematical expressions.
 
     Supports arithmetic operations (+, -, *, /, //, %, **), parentheses, and math functions
     such as sqrt, sin, cos, tan, log, log10, ceil, floor, radians, degrees, abs, round, min, max, pi, and e.
+    Integer results are limited to 4000 digits.
 
     Args:
         expression: The mathematical expression string to evaluate (e.g. '125 * 4 + 2**5', 'sqrt(144) + 10', 'sin(pi / 2)').
@@ -80,11 +162,11 @@ def calculate(expression: str) -> str:
         return f"Security error: {error_msg}. Only basic arithmetic and standard math functions are allowed."
 
     try:
-        compiled_code = compile(parsed_tree, filename="<math_expression>", mode="eval")
-        result = eval(compiled_code, {"__builtins__": {}}, SAFE_MATH)
-        return str(result)
+        return str(_evaluate(parsed_tree))
     except ZeroDivisionError:
         return "Math error: Division by zero is undefined."
+    except CalculationLimitError as e:
+        return f"Math error: Calculation too large ({e}). Use smaller numbers, or floats for an approximation, e.g. 2.0**1000."
     except OverflowError:
         return "Math error: Numerical calculation resulted in an overflow."
     except Exception as e:  # noqa: BLE001

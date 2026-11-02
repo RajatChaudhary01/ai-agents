@@ -1,4 +1,3 @@
-import os
 import sys
 
 # Ensure UTF-8 output on Windows terminal
@@ -10,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from ai_agents.agents import create_first_agent
+from ai_agents.models import describe_model
 
 
 def main() -> None:
@@ -18,13 +18,12 @@ def main() -> None:
         if len(sys.argv) > 1
         else "What is the current time in Tokyo, and what is the 10th Fibonacci number?"
     )
-    model_name = os.getenv("MODEL_ID", "ollama_chat/qwen2.5-coder:7b")
+    agent = create_first_agent()
     print("=" * 60)
-    print(f"[AI Agent] smolagents + {model_name}")
+    print(f"[AI Agent] smolagents + {describe_model(agent.model)}")
     print(f"Prompt: {prompt}")
     print("=" * 60 + "\n")
 
-    agent = create_first_agent()
     result = agent.run(prompt)
 
     print("\n" + "=" * 60)

@@ -1,4 +1,5 @@
 import math
+import time
 
 import pytest
 
@@ -61,3 +62,41 @@ def test_overflow():
 
 def test_evaluation_error():
     assert calculate(expression="sqrt(-1)").startswith("Evaluation error")
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "10**10**8",
+        "9**9**9",
+        "(-2)**10**7",
+        "factorial(10**6)",
+        "comb(10**6, 500000)",
+        "perm(20000, 10000)",
+        "factorial(3000) * factorial(3000)",
+        "2**14000",
+        "factorial(5000)",
+    ],
+)
+def test_huge_calculations_are_rejected_quickly(expression):
+    start = time.perf_counter()
+    result = calculate(expression=expression)
+    assert result.startswith("Math error: Calculation too large"), result
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected_digits"),
+    [("2**13000", 3914), ("factorial(1000)", 2568), ("10**3999", 4000)],
+)
+def test_large_but_allowed_integers(expression, expected_digits):
+    assert len(calculate(expression=expression)) == expected_digits
+
+
+def test_float_power_overflow_still_reported():
+    assert "overflow" in calculate(expression="2.0 ** 100000")
+
+
+@pytest.mark.parametrize("expression", ["'a' * 10**9", "b'x' * 3", "'abc'"])
+def test_non_numeric_constants_are_rejected(expression):
+    assert calculate(expression=expression).startswith("Security error")
