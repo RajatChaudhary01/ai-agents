@@ -17,3 +17,10 @@ dist/
 # Editor and IDE
 .vscode/
 .agents/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/

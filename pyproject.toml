@@ -18,6 +18,43 @@ dependencies = [
 [project.scripts]
 ai-agents = "ai_agents:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.11",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "BLE", # blind except
+    "C4",  # comprehensions
+    "PT",  # pytest style
+    "RUF", # ruff-specific
+]
+ignore = ["E501"]  # long lines are handled by the formatter
+
+[tool.ruff.lint.per-file-ignores]
+# stdout must be reconfigured / .env loaded before importing the agent
+"app.py" = ["E402"]
+"src/ai_agents/__init__.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
 build-backend = "uv_build"

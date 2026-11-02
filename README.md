@@ -70,7 +70,7 @@ Developed as an enhanced, fully autonomous implementation of Unit 1 of the Huggi
 - **Universal Model Portability**: Fully decoupled from hardcoded endpoints. Switch between offline local execution (`Ollama` + `qwen2.5-coder` or `qwen-coder-14b`) and ultra-fast cloud LPUs (`Groq` + `qwen3.8-27b`) by updating a single variable in `.env`.
 - **AST-Sandboxed Math Calculator**: Built-in `calculate` tool leveraging Python's `ast.parse` module with strict node and identifier whitelisting to guarantee precision and eliminate arbitrary code execution vulnerabilities.
 - **World Time Awareness**: Custom `get_current_time_in_timezone` tool supporting any valid IANA timezone identifier via `pytz`.
-- **Live Information Retrieval**: Integrated `DuckDuckGoSearchTool` for real-time web lookups.
+- **Resilient Live Search**: `web_search` tool built on `ddgs` with input validation, timeouts, retries with exponential backoff, multi-backend fallback (DuckDuckGo → auto → Wikipedia) and a result cache, so network failures degrade gracefully instead of crashing the agent.
 - **Tuned Prompt Engineering**: Streamlined `prompts.yaml` (88 lines) stripped of hallucinated ghost tools, fully compliant with modern `smolagents` (v1.26+).
 - **Dual Interfaces**: Interactive terminal CLI (`uv run ai-agents`) and browser chat interface (`uv run python app.py`).
 - **Reproducible Environment**: Built with `uv` for fast dependency resolution and strictly locked virtual environments.
@@ -101,6 +101,7 @@ Developed as an enhanced, fully autonomous implementation of Unit 1 of the Huggi
 ```text
 ai-agents/
 ├── .env.example               # Configuration template for model and API keys
+├── .github/workflows/ci.yml   # PR checks: ruff lint, ruff format, pytest
 ├── app.py                     # Gradio Web UI entry point
 ├── docs/
 │   └── images/                # Execution screenshots
@@ -117,7 +118,9 @@ ai-agents/
         └── tools/
             ├── __init__.py    # Tool package exports
             ├── math_tools.py  # AST-guarded calculation tool (calculate)
+            ├── search_tools.py # Resilient web search with fallbacks (web_search)
             └── time_tools.py  # Timezone fetching tool (get_current_time_in_timezone)
+└── tests/                     # pytest suite (no network or LLM required)
 ```
 
 ---
@@ -205,7 +208,46 @@ Navigate to `http://127.0.0.1:7860` to access the chat UI.
 | :-------------- | :--------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
 | **Calculator**  | `calculate(expression: str) -> str`                  | Parses input via `ast.parse`. Validates node types against safe mathematical subsets and evaluates with `__builtins__` disabled. |
 | **World Clock** | `get_current_time_in_timezone(timezone: str) -> str` | Validates timezone string with `pytz` and returns formatted local timestamp.                                                     |
-| **Web Search**  | `DuckDuckGoSearchTool()`                             | Queries DuckDuckGo for live facts, scraping relevant document summaries.                                                         |
+| **Web Search**  | `web_search(query: str) -> str`                      | Validates/normalises the query, then tries each backend with a timeout and backoff retries on transient errors (timeouts, rate limits). Falls back to cached results, and finally returns a "Search unavailable" message rather than raising. |
+
+### Web Search Configuration
+
+Optional `.env` settings:
+
+| Variable             | Default                      | Meaning                                         |
+| :------------------- | :--------------------------- | :---------------------------------------------- |
+| `SEARCH_MAX_RESULTS` | `5`                          | Results per query (clamped to 1-25)             |
+| `SEARCH_TIMEOUT`     | `10`                         | Per-request timeout in seconds                  |
+| `SEARCH_BACKENDS`    | `duckduckgo,auto,wikipedia`  | `ddgs` backends tried in order until one works  |
+
+---
+
+## Development
+
+Install the project with dev tools (pytest, pytest-cov, ruff):
+
+```bash
+uv sync --group dev
+```
+
+| Task              | Command                                     |
+| :---------------- | :------------------------------------------ |
+| Run tests         | `uv run pytest`                             |
+| Tests + coverage  | `uv run pytest --cov=ai_agents`             |
+| Lint              | `uv run ruff check .`                       |
+| Auto-fix lint     | `uv run ruff check . --fix`                 |
+| Format            | `uv run ruff format .`                      |
+
+The test suite fakes the search client and never calls the network or an LLM.
+
+### Continuous Integration
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`:
+
+1. **Lint & format**: `ruff check` and `ruff format --check`
+2. **Tests**: `pytest` with coverage on Python 3.12 and 3.13
+
+Both jobs install from `uv.lock` with `--locked`, so CI fails if the lockfile is out of date. Run `uv lock` after changing dependencies.
 
 ---
 

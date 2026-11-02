@@ -5,18 +5,18 @@ from smolagents import tool
 
 # Whitelist safe functions and constants from the standard math library
 SAFE_MATH: dict[str, object] = {
-    name: getattr(math, name)
-    for name in dir(math)
-    if not name.startswith("_")
+    name: getattr(math, name) for name in dir(math) if not name.startswith("_")
 }
-SAFE_MATH.update({
-    "abs": abs,
-    "round": round,
-    "min": min,
-    "max": max,
-    "pi": math.pi,
-    "e": math.e,
-})
+SAFE_MATH.update(
+    {
+        "abs": abs,
+        "round": round,
+        "min": min,
+        "max": max,
+        "pi": math.pi,
+        "e": math.e,
+    }
+)
 
 # Allowed AST node types for safe mathematical evaluation
 ALLOWED_NODES = (
