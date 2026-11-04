@@ -30,13 +30,24 @@ def load_prompt_templates() -> dict:
     return yaml.safe_load(text)
 
 
+def _env_number(name: str, cast: type[int] | type[float]) -> int | float | None:
+    """Read an optional numeric env var, failing with a clear message if it is invalid."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return cast(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a {cast.__name__}, got {raw!r}") from None
+
+
 def _build_search_tool() -> ResilientWebSearchTool:
     """Web search tool configured from SEARCH_* environment variables."""
     kwargs: dict = {}
-    if max_results := os.getenv("SEARCH_MAX_RESULTS"):
-        kwargs["max_results"] = int(max_results)
-    if timeout := os.getenv("SEARCH_TIMEOUT"):
-        kwargs["timeout"] = float(timeout)
+    if (max_results := _env_number("SEARCH_MAX_RESULTS", int)) is not None:
+        kwargs["max_results"] = max_results
+    if (timeout := _env_number("SEARCH_TIMEOUT", float)) is not None:
+        kwargs["timeout"] = timeout
     if backends := os.getenv("SEARCH_BACKENDS"):
         kwargs["backends"] = backends.split(",")
     return ResilientWebSearchTool(**kwargs)

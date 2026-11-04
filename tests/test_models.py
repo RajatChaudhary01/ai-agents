@@ -121,3 +121,10 @@ class TestFallbackBehaviour:
         )
         with pytest.raises(Exception, match=r"(?i)connect|refused"):
             model.generate(user_message("hello"))
+
+
+@pytest.mark.parametrize("value", ["8k", "0", "-1"])
+def test_invalid_num_ctx_has_clear_error(monkeypatch, value):
+    monkeypatch.setenv("MODEL_NUM_CTX", value)
+    with pytest.raises(ValueError, match="MODEL_NUM_CTX"):
+        model_from_env()

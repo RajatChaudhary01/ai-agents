@@ -138,7 +138,7 @@ ai-agents/
 ### 2. Clone and Install
 
 ```bash
-git clone https://github.com/lowkey999-netizen/ai-agents.git
+git clone https://github.com/RajatChaudhary01/ai-agents.git
 cd ai-agents
 uv sync
 ```

@@ -46,19 +46,35 @@ class ModelSpec:
         return params
 
 
+def _env_int(name: str) -> int | None:
+    """Read an optional positive integer env var, failing with a clear message if invalid."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from None
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value}")
+    return value
+
+
 def spec_from_env(prefix: str, default_model_id: str | None = None) -> ModelSpec | None:
     """Read ``{prefix}ID``, ``{prefix}API_BASE``, ``{prefix}API_KEY`` and ``{prefix}NUM_CTX``."""
     model_id = (os.getenv(f"{prefix}ID") or default_model_id or "").strip()
     if not model_id:
         return None
     is_ollama = model_id.startswith("ollama")
-    api_base = os.getenv(f"{prefix}API_BASE") or (DEFAULT_OLLAMA_API_BASE if is_ollama else None)
-    num_ctx = os.getenv(f"{prefix}NUM_CTX")
+    api_base = (os.getenv(f"{prefix}API_BASE") or "").strip() or (
+        DEFAULT_OLLAMA_API_BASE if is_ollama else None
+    )
+    num_ctx = _env_int(f"{prefix}NUM_CTX")
     return ModelSpec(
         model_id=model_id,
         api_base=api_base,
-        api_key=os.getenv(f"{prefix}API_KEY") or None,
-        num_ctx=int(num_ctx) if num_ctx else (DEFAULT_OLLAMA_NUM_CTX if is_ollama else None),
+        api_key=(os.getenv(f"{prefix}API_KEY") or "").strip() or None,
+        num_ctx=num_ctx or (DEFAULT_OLLAMA_NUM_CTX if is_ollama else None),
     )
 
 

@@ -46,6 +46,9 @@ ALLOWED_NODES = (
 # 10**10**8 or factorial(10**6) would keep the CPU busy for minutes and block the agent.
 MAX_RESULT_DIGITS = 4000  # stays below Python's 4300-digit int->str conversion limit
 MAX_COMBINATORIC_ARG = 10_000  # cap for factorial / comb / perm arguments
+# Deeply nested input (e.g. 100k unary minus signs) makes ast.parse raise MemoryError or
+# RecursionError instead of SyntaxError, so oversized expressions are rejected up front.
+MAX_EXPRESSION_LENGTH = 1_000
 _COMBINATORIC_FUNCS = frozenset({"factorial", "comb", "perm"})
 
 _BIN_OPS: dict[type[ast.operator], Callable[[Any, Any], Any]] = {
@@ -152,10 +155,18 @@ def calculate(expression: str) -> str:
     if not cleaned:
         return "Error: Empty expression provided."
 
+    if len(cleaned) > MAX_EXPRESSION_LENGTH:
+        return (
+            f"Error: Expression is too long ({len(cleaned)} characters, "
+            f"max {MAX_EXPRESSION_LENGTH}). Split it into smaller calculations."
+        )
+
     try:
         parsed_tree = ast.parse(cleaned, mode="eval")
-    except SyntaxError as e:
+    except (SyntaxError, ValueError) as e:
         return f"Syntax error in mathematical expression '{cleaned}': {e}"
+    except (RecursionError, MemoryError):
+        return "Syntax error: Expression is nested too deeply to evaluate."
 
     is_safe, error_msg = _validate_ast(parsed_tree)
     if not is_safe:
@@ -169,5 +180,7 @@ def calculate(expression: str) -> str:
         return f"Math error: Calculation too large ({e}). Use smaller numbers, or floats for an approximation, e.g. 2.0**1000."
     except OverflowError:
         return "Math error: Numerical calculation resulted in an overflow."
+    except RecursionError:
+        return "Math error: Expression is nested too deeply to evaluate."
     except Exception as e:  # noqa: BLE001
         return f"Evaluation error: {e}"
