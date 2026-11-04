@@ -128,3 +128,41 @@ def test_invalid_num_ctx_has_clear_error(monkeypatch, value):
     monkeypatch.setenv("MODEL_NUM_CTX", value)
     with pytest.raises(ValueError, match="MODEL_NUM_CTX"):
         model_from_env()
+
+
+class TestFallbackChain:
+    def test_chain_from_numbered_env_vars(self, monkeypatch):
+        monkeypatch.setenv("MODEL_ID", "ollama_chat/local")
+        monkeypatch.setenv("FALLBACK_MODEL_ID", "groq/a")
+        monkeypatch.setenv("FALLBACK_MODEL_2_ID", "gemini/b")
+        monkeypatch.setenv("FALLBACK_MODEL_2_API_KEY", "gemini-key")
+        monkeypatch.setenv("FALLBACK_MODEL_4_ID", "cerebras/c")  # gaps are allowed
+        model = model_from_env()
+        assert describe_model(model) == "ollama_chat/local -> groq/a -> gemini/b -> cerebras/c"
+        assert model.client_kwargs["fallbacks"] == [
+            {"ollama_chat/local": ["groq/a", "gemini/b", "cerebras/c"]}
+        ]
+        keys = {
+            m["model_name"]: m["litellm_params"].get("api_key")
+            for m in model.client_kwargs["model_list"]
+        }
+        assert keys["gemini/b"] == "gemini-key"
+
+    def test_duplicate_models_are_dropped(self):
+        model = build_model(
+            ModelSpec("groq/a"), [ModelSpec("gemini/b"), ModelSpec("groq/a"), ModelSpec("gemini/b")]
+        )
+        assert describe_model(model) == "groq/a -> gemini/b"
+
+    def test_empty_chain_is_plain_model(self):
+        assert type(build_model(ModelSpec("groq/a"), [])) is LiteLLMModel
+
+    def test_walks_whole_chain_until_one_works(self):
+        model = build_model(
+            ModelSpec("ollama_chat/primary", api_base=DEAD_OLLAMA),
+            [
+                ModelSpec("ollama_chat/second", api_base=DEAD_OLLAMA),
+                ModelSpec("ollama_chat/third", extra={"mock_response": "answer from third"}),
+            ],
+        )
+        assert model.generate(user_message("hello")).content == "answer from third"

@@ -1,13 +1,15 @@
-"""LLM model construction with an optional automatic fallback model.
+"""LLM model construction with an optional chain of automatic fallback models.
 
-Set ``FALLBACK_MODEL_ID`` (e.g. a Groq or Gemini model) and requests that fail on the
-primary model (Ollama host offline, connection refused, provider error) are retried
-transparently on the fallback through a LiteLLM Router.
+Set ``FALLBACK_MODEL_ID`` (e.g. a Groq or Gemini model), and optionally
+``FALLBACK_MODEL_2_ID`` ... ``FALLBACK_MODEL_9_ID``. Requests that fail on the primary
+model (Ollama host offline, connection refused, rate limit, provider error) are retried
+transparently on each fallback in order through a LiteLLM Router.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,6 +19,7 @@ DEFAULT_MODEL_ID = "ollama_chat/qwen2.5-coder:7b"
 DEFAULT_OLLAMA_API_BASE = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_NUM_CTX = 8192
 _FLATTEN_PREFIXES = ("ollama", "groq", "cerebras")
+MAX_FALLBACKS = 9  # FALLBACK_MODEL_*, then FALLBACK_MODEL_2_* ... FALLBACK_MODEL_9_*
 
 
 @dataclass(frozen=True)
@@ -114,9 +117,33 @@ class FallbackRouterModel(LiteLLMRouterModel):
         return completion_kwargs
 
 
-def build_model(primary: ModelSpec, fallback: ModelSpec | None = None) -> LiteLLMModel:
-    """Return a plain LiteLLMModel, or a Router-backed model when a fallback is given."""
-    if fallback is None or fallback.model_id == primary.model_id:
+def _dedupe(primary: ModelSpec, fallbacks: Sequence[ModelSpec]) -> list[ModelSpec]:
+    """Drop fallbacks that repeat a model already in the chain (Router names must be unique)."""
+    seen = {primary.model_id}
+    unique = []
+    for spec in fallbacks:
+        if spec.model_id not in seen:
+            seen.add(spec.model_id)
+            unique.append(spec)
+    return unique
+
+
+def build_model(
+    primary: ModelSpec, fallback: ModelSpec | Sequence[ModelSpec] | None = None
+) -> LiteLLMModel:
+    """Return a plain LiteLLMModel, or a Router-backed model when fallbacks are given.
+
+    ``fallback`` may be a single spec or an ordered sequence; each is tried in turn.
+    """
+    if fallback is None:
+        fallbacks: list[ModelSpec] = []
+    elif isinstance(fallback, ModelSpec):
+        fallbacks = [fallback]
+    else:
+        fallbacks = list(fallback)
+    fallbacks = _dedupe(primary, fallbacks)
+
+    if not fallbacks:
         extra = {
             k: v
             for k, v in primary.litellm_params().items()
@@ -128,13 +155,22 @@ def build_model(primary: ModelSpec, fallback: ModelSpec | None = None) -> LiteLL
             api_key=primary.api_key,
             **extra,
         )
-    return FallbackRouterModel(primary, [fallback])
+    return FallbackRouterModel(primary, fallbacks)
+
+
+def fallbacks_from_env() -> list[ModelSpec]:
+    """Read FALLBACK_MODEL_* then FALLBACK_MODEL_2_* ... FALLBACK_MODEL_9_*, in order.
+
+    Unset slots are skipped, so the numbering does not need to be contiguous.
+    """
+    prefixes = ["FALLBACK_MODEL_"] + [f"FALLBACK_MODEL_{n}_" for n in range(2, MAX_FALLBACKS + 1)]
+    return [spec for prefix in prefixes if (spec := spec_from_env(prefix)) is not None]
 
 
 def model_from_env() -> LiteLLMModel:
-    """Build the agent's model from MODEL_* and optional FALLBACK_MODEL_* variables."""
+    """Build the agent's model from MODEL_* and the optional FALLBACK_MODEL_* chain."""
     primary = spec_from_env("MODEL_", DEFAULT_MODEL_ID) or ModelSpec(DEFAULT_MODEL_ID)
-    return build_model(primary, spec_from_env("FALLBACK_MODEL_"))
+    return build_model(primary, fallbacks_from_env())
 
 
 def describe_model(model: LiteLLMModel) -> str:
