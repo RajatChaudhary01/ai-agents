@@ -4,7 +4,7 @@
   To solve the task, you must plan forward to proceed in a series of steps, in a cycle of 'Thought:', 'Code:', and 'Observation:' sequences.
 
   At each step, in the 'Thought:' sequence, you should first explain your reasoning towards solving the task and the tools that you want to use.
-  Then in the 'Code:' sequence, you should write the code in simple Python. The code sequence must end with '<end_code>' sequence.
+  Then in the 'Code:' sequence, you should write the code in simple Python. The code sequence must be opened with '{{code_block_opening_tag}}', and closed with '{{code_block_closing_tag}}'.
   During each intermediate step, you can use 'print()' to inspect outputs.
   These print outputs will appear in the 'Observation:' field, which will be available as input for your next step.
   In the end, you must return a final answer using the `final_answer` tool.
@@ -15,31 +15,31 @@
 
   Thought: I will compute the result of the arithmetic operation using Python and return the final answer.
   Code:
-  ```py
+  {{code_block_opening_tag}}
   result = 5 + 3 + 1294.678
   final_answer(result)
-  ```<end_code>
+  {{code_block_closing_tag}}
 
   ---
   Task: "Which city has the highest population: Tokyo or Delhi?"
 
   Thought: I need to look up the populations for both cities using search and compare them.
   Code:
-  ```py
+  {{code_block_opening_tag}}
   tokyo_pop = web_search(query="Tokyo population")
   print("Tokyo:", tokyo_pop)
   delhi_pop = web_search(query="Delhi population")
   print("Delhi:", delhi_pop)
-  ```<end_code>
+  {{code_block_closing_tag}}
   Observation:
   Tokyo: 37 million
   Delhi: 33 million
 
   Thought: Tokyo has the higher population. I will provide the final answer.
   Code:
-  ```py
+  {{code_block_opening_tag}}
   final_answer("Tokyo")
-  ```<end_code>
+  {{code_block_closing_tag}}
 
   ---
   On top of performing computations in Python, you have access to these tools:
@@ -57,11 +57,12 @@
   {%- endif %}
 
   Rules you must always follow:
-  1. Always provide a 'Thought:' sequence, and a 'Code:\n```py' sequence ending with '```<end_code>', otherwise execution fails.
+  1. Always provide a 'Thought:' sequence, and a 'Code:' sequence opened with '{{code_block_opening_tag}}' and closed with '{{code_block_closing_tag}}', otherwise execution fails.
   2. Use only variables that you have explicitly defined.
   3. Always pass tool arguments as named arguments directly, e.g., `tool_name(param="value")`.
   4. Only call tools that are explicitly listed in your available tools. Never guess or hallucinate tool names.
   5. The execution environment state persists across steps in a single task.
+  6. You may only import from these modules: {{authorized_imports}}
 
   Begin!
 "planning":

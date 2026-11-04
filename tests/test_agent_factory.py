@@ -61,3 +61,22 @@ class TestPromptTemplates:
         monkeypatch.setenv("PROMPTS_PATH", str(tmp_path / "nope.yaml"))
         with pytest.raises(FileNotFoundError, match="PROMPTS_PATH"):
             load_prompt_templates()
+
+
+@pytest.mark.parametrize(
+    ("var", "value"), [("SEARCH_MAX_RESULTS", "five"), ("SEARCH_TIMEOUT", "10s")]
+)
+def test_invalid_search_env_has_clear_error(monkeypatch, var, value):
+    monkeypatch.setenv(var, value)
+    with pytest.raises(ValueError, match=var):
+        create_first_agent()
+
+
+def test_system_prompt_uses_agent_code_block_tags():
+    agent = create_first_agent()
+    opening, closing = agent.code_block_tags
+    prompt = agent.system_prompt
+    assert "<end_code>" not in prompt
+    assert opening in prompt
+    assert closing in prompt
+    assert "{{" not in prompt

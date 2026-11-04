@@ -14,3 +14,14 @@ def test_valid_timezone():
 def test_invalid_timezone_returns_error_message():
     result = get_current_time_in_timezone(timezone="Mars/Olympus_Mons")
     assert result.startswith("Error fetching time for timezone 'Mars/Olympus_Mons'")
+
+
+def test_timezone_whitespace_is_stripped():
+    result = get_current_time_in_timezone(timezone="  Asia/Tokyo ")
+    assert result.startswith("The current local time in Asia/Tokyo is:")
+
+
+def test_unknown_timezone_suggests_iana_names():
+    result = get_current_time_in_timezone(timezone="Tokyo")
+    assert "unknown timezone" in result
+    assert "Asia/Tokyo" in result

@@ -100,3 +100,20 @@ def test_float_power_overflow_still_reported():
 @pytest.mark.parametrize("expression", ["'a' * 10**9", "b'x' * 3", "'abc'"])
 def test_non_numeric_constants_are_rejected(expression):
     assert calculate(expression=expression).startswith("Security error")
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "-" * 200_000 + "1",  # ast.parse raises MemoryError
+        "1+" * 50_000 + "1",  # ast.parse raises RecursionError
+        "1" * 1_001,
+    ],
+)
+def test_huge_or_deeply_nested_expression_returns_error(expression):
+    result = calculate(expression=expression)
+    assert result.startswith(("Error", "Syntax error"))
+
+
+def test_null_byte_is_a_syntax_error():
+    assert calculate(expression="1\x00+1").startswith("Syntax error")
