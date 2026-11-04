@@ -121,6 +121,7 @@ ai-agents/
         ├── web.py             # Web UI: per-session agents, Tools tab, local/hosting modes
         ├── hosting/
         │   ├── accounts.py    # SQLite users and sessions (scrypt password hashes)
+        │   ├── captcha.py     # Cloudflare Turnstile verification
         │   ├── ratelimit.py   # Sliding-window limits, client IP and IPv6 /64 grouping
         │   └── server.py      # Sign-up/login pages, limits, security headers, Gradio mount
         ├── models.py          # Model factory with optional fallback chain (LiteLLM Router)
@@ -293,6 +294,12 @@ What hosting mode adds:
   one account hopping between IPs is still held to its account limit.
 - **Sign-up abuse controls**: limited accounts per IP per day, and IPv6 clients are grouped
   by /64 so rotating addresses inside one allocation does not help.
+- **CAPTCHA**: optional [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/)
+  on sign-up and login stops scripted account creation and password guessing that rotates
+  through many IPs (botnets, proxy services), which per-IP limits alone cannot catch. It is
+  free and usually invisible to real people. Verification fails closed, and it runs before
+  any username check, so bots cannot even probe which names exist. See
+  [Turning on the CAPTCHA](#turning-on-the-captcha).
 - **Brute-force protection**: failed logins are limited per IP and per account.
 - **Hardening**: security headers, cross-site form posts rejected, every Gradio route
   (including its API) requires a session, uploads capped at 1 MB, model errors hidden from
@@ -314,6 +321,9 @@ a password or disabling an account logs that user out everywhere.
 | Variable                              | Default       | Meaning                                                       |
 | :------------------------------------ | :------------ | :------------------------------------------------------------ |
 | `APP_SIGNUP`                          | `open`        | `closed` disables `/signup`; create accounts with `users add` |
+| `TURNSTILE_SITE_KEY`                  | none          | Turnstile site key; set with the secret to enable the CAPTCHA |
+| `TURNSTILE_SECRET_KEY`                | none          | Turnstile secret key (server side only)                       |
+| `APP_CAPTCHA_ON_LOGIN`                | `true`        | Also require the CAPTCHA on login (sign-up always has it)     |
 | `APP_DB_PATH`                         | `data/app.db` | SQLite file for accounts and sessions                         |
 | `APP_TRUST_PROXY`                     | `false`       | Read the client IP from `X-Forwarded-For` (only behind a proxy) |
 | `APP_COOKIE_SECURE`                   | `true`        | Secure cookies; set `false` only for plain-http local testing |
@@ -341,6 +351,25 @@ Web UI settings for both modes:
 | `GRADIO_SERVER_PORT`      | `7860`        | `7860`       | Port to listen on                                           |
 | `GRADIO_SHARE`            | `false`       | not allowed  | `true` also publishes a public `*.gradio.live` link         |
 
+#### Turning on the CAPTCHA
+
+1. In the [Cloudflare dashboard](https://dash.cloudflare.com/) open **Turnstile** and
+   **Add widget** (free; your domain does not need to use Cloudflare DNS). Add your domain
+   as a hostname, and `localhost` if you want to test locally. Choose the **Managed** mode.
+2. Put the two keys in `.env`:
+   ```env
+   TURNSTILE_SITE_KEY=0x4AAAAAAA...
+   TURNSTILE_SECRET_KEY=0x4AAAAAAA...
+   ```
+3. Restart. The startup banner says `CAPTCHA: Turnstile on sign-up and login`.
+
+To try it locally without an account, use Cloudflare's
+[test keys](https://developers.cloudflare.com/turnstile/troubleshooting/testing/):
+site key `1x00000000000000000000AA` with secret `1x0000000000000000000000000000000AA`
+always passes; secret `2x0000000000000000000000000000000AA` always fails. The server must be
+able to reach `challenges.cloudflare.com`; if it cannot, sign-ups and logins are refused
+rather than let through unchecked.
+
 Rate-limit counters live in memory and reset when the server restarts. Tip: set
 `AGENT_VERBOSITY=0` or `1` to keep the server console readable with several users.
 
@@ -360,7 +389,8 @@ obtains and renews HTTPS certificates from Let's Encrypt automatically.
    ```bash
    cp deploy/.env.example deploy/.env
    ```
-   Set `DOMAIN` in `deploy/.env`; set your model, API keys and any `APP_*` limits in `.env`.
+   Set `DOMAIN` in `deploy/.env`; set your model, API keys, any `APP_*` limits and the
+   [Turnstile keys](#turning-on-the-captcha) in `.env`.
    To use Ollama on the same machine, set `MODEL_API_BASE=http://host.docker.internal:11434`
    and make Ollama listen beyond localhost (`OLLAMA_HOST=0.0.0.0`, firewalled from the internet).
 3. Start it:

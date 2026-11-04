@@ -13,6 +13,8 @@ Abuse controls (all configurable, see ``HostingConfig``):
   so mass sign-ups do not buy more usage.
 * Sign-ups are limited per IP per day; login failures are limited per IP and per account.
 * IPv6 clients are grouped by /64 so rotating addresses inside one allocation does not help.
+* Optional Cloudflare Turnstile CAPTCHA on sign-up and login (``TURNSTILE_*``) stops
+  scripted account creation and password guessing from many IPs.
 """
 
 import html
@@ -22,8 +24,10 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from ai_agents.hosting import captcha as captcha_mod
 from ai_agents.hosting.accounts import AccountError, AccountStore
-from ai_agents.hosting.ratelimit import RateLimiter, Rule, client_ip
+from ai_agents.hosting.captcha import Turnstile
+from ai_agents.hosting.ratelimit import RateLimiter, Rule, client_ip, raw_client_ip
 from ai_agents.web import AgentFactory, WebConfig, build_blocks, env_flag, env_int
 
 MINUTE, HOUR, DAY = 60, 3600, 86400
@@ -47,6 +51,8 @@ class HostingConfig:
     messages_per_ip_per_day: int
     messages_global_per_day: int
     tool_calls_per_minute: int
+    turnstile: Turnstile | None = None  # CAPTCHA; None disables it
+    captcha_on_login: bool = True
 
     @classmethod
     def from_env(cls) -> "HostingConfig":
@@ -68,6 +74,8 @@ class HostingConfig:
             messages_per_ip_per_day=env_int("APP_MESSAGES_PER_IP_PER_DAY", 200),
             messages_global_per_day=env_int("APP_MESSAGES_GLOBAL_PER_DAY", 2000),
             tool_calls_per_minute=env_int("APP_TOOL_CALLS_PER_MINUTE", 60),
+            turnstile=Turnstile.from_env(),
+            captcha_on_login=env_flag("APP_CAPTCHA_ON_LOGIN", default=True),
         )
 
 
@@ -94,28 +102,42 @@ button {{ width:100%; margin-top:20px; padding:11px; border:0; border-radius:8px
 .err {{ background:var(--err-bg); color:var(--err); padding:10px 12px; border-radius:8px; }}
 .hint {{ color:var(--muted); font-size:.85rem; margin-top:4px; }}
 .alt {{ margin-top:18px; text-align:center; color:var(--muted); }} a {{ color:var(--accent); }}
+.captcha {{ margin-top:18px; min-height:65px; }}
 </style></head><body><main>{body}</main></body></html>"""
 
 
-def _page(title: str, body: str, status: int = 200) -> Any:
+def _page(title: str, body: str, status: int = 200, captcha: Turnstile | None = None) -> Any:
     from fastapi.responses import HTMLResponse
 
+    csp = (
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'"
+    )
+    if captcha is not None:
+        # Turnstile loads one script and renders its challenge in an iframe.
+        csp += f"; script-src {captcha_mod.ORIGIN}; frame-src {captcha_mod.ORIGIN}"
+        body += captcha.script_html()
     return HTMLResponse(
         _PAGE.format(title=html.escape(title), body=body),
         status_code=status,
-        headers={
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
-            "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-            "Cache-Control": "no-store",
-        },
+        headers={"Content-Security-Policy": csp, "Cache-Control": "no-store"},
     )
+
+
+def _captcha_html(captcha: Turnstile | None) -> str:
+    return f'<div class="captcha">{captcha.widget_html()}</div>' if captcha else ""
 
 
 def _error_html(error: str | None) -> str:
     return f'<p class="err" role="alert">{html.escape(error)}</p>' if error else ""
 
 
-def login_page(error: str | None = None, signup_open: bool = True, status: int = 200) -> Any:
+def login_page(
+    error: str | None = None,
+    signup_open: bool = True,
+    status: int = 200,
+    captcha: Turnstile | None = None,
+) -> Any:
     alt = '<p class="alt">No account? <a href="/signup">Sign up</a></p>' if signup_open else ""
     return _page(
         "Log in",
@@ -126,12 +148,19 @@ def login_page(error: str | None = None, signup_open: bool = True, status: int =
 <input id="u" name="username" autocomplete="username" required maxlength="32" autofocus>
 <label for="p">Password</label>
 <input id="p" name="password" type="password" autocomplete="current-password" required maxlength="128">
+{_captcha_html(captcha)}
 <button type="submit">Log in</button></form>{alt}""",
         status,
+        captcha,
     )
 
 
-def signup_page(error: str | None = None, username: str = "", status: int = 200) -> Any:
+def signup_page(
+    error: str | None = None,
+    username: str = "",
+    status: int = 200,
+    captcha: Turnstile | None = None,
+) -> Any:
     return _page(
         "Sign up",
         f"""<h1>Create an account</h1><p class="sub">free, with fair-use limits</p>
@@ -146,9 +175,11 @@ def signup_page(error: str | None = None, username: str = "", status: int = 200)
 <p class="hint">At least 10 characters</p>
 <label for="c">Repeat password</label>
 <input id="c" name="confirm" type="password" autocomplete="new-password" required maxlength="128">
+{_captcha_html(captcha)}
 <button type="submit">Sign up</button></form>
 <p class="alt">Have an account? <a href="/login">Log in</a></p>""",
         status,
+        captcha,
     )
 
 
@@ -281,11 +312,31 @@ class HostedApp:
         def healthz():
             return {"ok": True}
 
+        login_captcha = config.turnstile if config.captcha_on_login else None
+        captcha_error = "Please complete the verification check and try again."
+
+        def show_login(error: str | None = None, status: int = 200):
+            return login_page(error, config.signup_open, status, login_captcha)
+
+        def show_signup(error: str | None = None, username: str = "", status: int = 200):
+            return signup_page(error, username, status, config.turnstile)
+
+        async def captcha_passes(captcha: Turnstile | None, form: Any, request: Request) -> bool:
+            if captcha is None:
+                return True
+            client = getattr(request, "client", None)
+            remote_ip = raw_client_ip(
+                request.headers, getattr(client, "host", None), config.trust_proxy
+            )
+            token = form.get(captcha_mod.TOKEN_FIELD)
+            result = await captcha.verify(str(token) if token else None, remote_ip)
+            return result.ok
+
         @app.get("/login", include_in_schema=False)
         def login_form(request: Request):
             if self.current_user(request):
                 return redirect(f"{APP_PATH}/")
-            return login_page(signup_open=config.signup_open)
+            return show_login()
 
         @app.post("/login", include_in_schema=False)
         async def login(request: Request):
@@ -299,15 +350,15 @@ class HostedApp:
                 self.limiter.count(ip_key, window) >= config.login_failures_per_ip
                 or self.limiter.count(acct_key, window) >= config.login_failures_per_account
             ):
-                return login_page(
-                    "Too many failed logins. Please wait 15 minutes and try again.",
-                    config.signup_open,
-                    429,
+                return show_login(
+                    "Too many failed logins. Please wait 15 minutes and try again.", 429
                 )
+            if not await captcha_passes(login_captcha, form, request):
+                return show_login(captcha_error, 400)
             user = self.accounts.authenticate(username, password)
             if user is None:
                 self.limiter.hit([Rule(ip_key, 10**9, window), Rule(acct_key, 10**9, window)])
-                return login_page("Wrong username or password.", config.signup_open, 401)
+                return show_login("Wrong username or password.", 401)
             response = redirect(f"{APP_PATH}/")
             self._set_session_cookie(response, self.accounts.create_session(user.username))
             return response
@@ -318,7 +369,7 @@ class HostedApp:
                 return closed_page()
             if self.current_user(request):
                 return redirect(f"{APP_PATH}/")
-            return signup_page()
+            return show_signup()
 
         @app.post("/signup", include_in_schema=False)
         async def signup(request: Request):
@@ -333,23 +384,26 @@ class HostedApp:
                 [Rule(f"signup-try:ip:{ip}", config.signup_attempts_per_ip_per_hour, HOUR)]
             )
             if not attempts.allowed:
-                return signup_page(
+                return show_signup(
                     "Too many sign-up attempts. Please try again later.", username, 429
                 )
             created_key = f"signup-ok:ip:{ip}"
             if self.limiter.count(created_key, DAY) >= config.signups_per_ip_per_day:
-                return signup_page(
+                return show_signup(
                     "Too many accounts were created from your network today. "
                     "Please try again tomorrow.",
                     username,
                     429,
                 )
+            # Before anything else is checked, so bots cannot even probe which names exist.
+            if not await captcha_passes(config.turnstile, form, request):
+                return show_signup(captcha_error, username, 400)
             if password != confirm:
-                return signup_page("The passwords do not match.", username, 400)
+                return show_signup("The passwords do not match.", username, 400)
             try:
                 user = self.accounts.create_user(username, password, ip=ip)
             except AccountError as exc:
-                return signup_page(str(exc), username, 400)
+                return show_signup(str(exc), username, 400)
             self.limiter.hit([Rule(created_key, 10**9, DAY)])
             response = redirect(f"{APP_PATH}/")
             self._set_session_cookie(response, self.accounts.create_session(user.username))
@@ -471,6 +525,13 @@ def serve(factory: AgentFactory, web_config: WebConfig) -> None:
         f"per account, {c.messages_per_ip_per_hour}/h & {c.messages_per_ip_per_day}/day per IP, "
         f"{c.messages_global_per_day}/day total"
     )
+    if c.turnstile is None:
+        print(
+            "⚠️  Turnstile CAPTCHA is off: set TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY to "
+            "stop scripted sign-ups from many IPs."
+        )
+    else:
+        print(f"   CAPTCHA: Turnstile on sign-up{' and login' if c.captcha_on_login else ''}")
     if not c.trust_proxy:
         print(
             "⚠️  APP_TRUST_PROXY is off: behind a reverse proxy every visitor shares the "

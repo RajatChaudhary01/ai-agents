@@ -109,8 +109,8 @@ def ip_bucket(ip: str) -> str:
     return str(addr)
 
 
-def client_ip(headers: Mapping[str, str], peer: str | None, trust_proxy: bool) -> str:
-    """The real client address, as a rate-limit bucket.
+def raw_client_ip(headers: Mapping[str, str], peer: str | None, trust_proxy: bool) -> str:
+    """The real client address (not grouped).
 
     Only trust ``X-Forwarded-For`` when the app is reachable solely through a reverse
     proxy (``APP_TRUST_PROXY=true``); otherwise anyone could spoof the header. The last
@@ -120,5 +120,10 @@ def client_ip(headers: Mapping[str, str], peer: str | None, trust_proxy: bool) -
         forwarded = headers.get("x-forwarded-for") or headers.get("X-Forwarded-For") or ""
         hops = [h.strip() for h in forwarded.split(",") if h.strip()]
         if hops:
-            return ip_bucket(hops[-1])
-    return ip_bucket(peer or "unknown")
+            return hops[-1]
+    return (peer or "unknown").strip()
+
+
+def client_ip(headers: Mapping[str, str], peer: str | None, trust_proxy: bool) -> str:
+    """The real client address as a rate-limit bucket (IPv6 grouped by /64)."""
+    return ip_bucket(raw_client_ip(headers, peer, trust_proxy))

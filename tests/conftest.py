@@ -9,6 +9,7 @@ _CONFIG_PREFIXES = (
     "AGENT_",
     "GRADIO_",
     "APP_",
+    "TURNSTILE_",
     "PROMPTS_PATH",
 )
 
