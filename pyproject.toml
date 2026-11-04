@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 ai-agents = "ai_agents:main"
+ai-agents-web = "ai_agents.web:main"
 
 [dependency-groups]
 dev = [

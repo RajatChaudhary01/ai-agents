@@ -73,7 +73,7 @@ Developed as an enhanced, fully autonomous implementation of Unit 1 of the Huggi
 - **World Time Awareness**: Custom `get_current_time_in_timezone` tool supporting any valid IANA timezone identifier via `pytz`.
 - **Resilient Live Search**: `web_search` tool built on `ddgs` with input validation, timeouts, retries with exponential backoff, multi-backend fallback (DuckDuckGo → auto → Wikipedia) and a result cache, so network failures degrade gracefully instead of crashing the agent.
 - **Tuned Prompt Engineering**: Streamlined `src/ai_agents/prompts.yaml` stripped of hallucinated ghost tools, fully compliant with modern `smolagents` (v1.26+).
-- **Dual Interfaces**: Interactive terminal CLI (`uv run ai-agents`) and browser chat interface (`uv run python app.py`).
+- **Dual Interfaces**: Interactive terminal CLI (`uv run ai-agents`) and browser chat interface (`uv run python app.py`), with a separate login-protected hosting mode (`--host`) and an isolated agent per browser session.
 - **Reproducible Environment**: Built with `uv` for fast dependency resolution and strictly locked virtual environments.
 
 ---
@@ -104,7 +104,7 @@ ai-agents/
 ├── .env.example               # Configuration template for model and API keys
 ├── .github/workflows/ci.yml   # PR checks: ruff lint, ruff format, pytest
 ├── LICENSE                    # Apache License 2.0
-├── app.py                     # Gradio Web UI entry point
+├── app.py                     # Gradio Web UI entry point (wraps ai_agents.web)
 ├── docs/
 │   └── images/                # Execution screenshots
 ├── pyproject.toml             # Project metadata and dependencies
@@ -113,6 +113,7 @@ ai-agents/
 └── src/
     └── ai_agents/
         ├── __init__.py        # CLI entry point (uv run ai-agents)
+        ├── web.py             # Web UI: per-session agents, local and hosting modes
         ├── models.py          # Model factory with optional fallback chain (LiteLLM Router)
         ├── prompts.yaml       # ReAct system prompt and few-shot examples
         ├── agents/
@@ -243,21 +244,51 @@ uv run ai-agents "What is 45 * 12 + 10, and what time is it in London?"
 
 ### Gradio Web Interface
 
-Launch the browser chat application:
+Launch the browser chat application (either command works):
 
 ```bash
 uv run python app.py
 ```
 
-Navigate to `http://127.0.0.1:7860` to access the chat UI.
+```bash
+uv run ai-agents-web
+```
 
-The UI is local-only by default. Optional `.env` settings:
+Navigate to `http://127.0.0.1:7860` to access the chat UI. Every browser tab gets its own
+agent, so separate chats never share memory. Pressing **Clear** starts a fresh conversation.
 
-| Variable             | Default     | Meaning                                                        |
-| :------------------- | :---------- | :------------------------------------------------------------- |
-| `GRADIO_SERVER_NAME` | `127.0.0.1` | Interface to bind (`0.0.0.0` exposes it on your network)       |
-| `GRADIO_SERVER_PORT` | `7860`      | Port to listen on                                              |
-| `GRADIO_SHARE`       | `false`     | `true` also publishes a public `*.gradio.live` link - use with care |
+#### Local mode (default)
+
+For your own use: binds to `127.0.0.1`, no login, one request at a time.
+
+#### Hosting mode
+
+For serving other people. Turn it on explicitly with `--host` (or `APP_MODE=host`):
+
+```bash
+APP_AUTH=alice:change-me uv run python app.py --host
+```
+
+Hosting mode listens on all interfaces (`0.0.0.0`), **requires a login** (it refuses to start
+without `APP_AUTH`, so strangers cannot spend your API quota), handles several users in
+parallel, caps open sessions and message length, and hides error tracebacks from visitors.
+
+| Variable                  | Local default | Host default | Meaning                                                   |
+| :------------------------ | :------------ | :----------- | :-------------------------------------------------------- |
+| `APP_MODE`                | `local`       | `host`       | Mode when `--host` is not passed                          |
+| `APP_AUTH`                | none          | required     | Logins as `user:password`, comma-separated for several    |
+| `APP_ALLOW_ANONYMOUS`     | -             | `false`      | `true` allows hosting mode without a login (not advised)  |
+| `APP_CONCURRENCY`         | `1`           | `4`          | Requests processed in parallel                            |
+| `APP_MAX_SESSIONS`        | `5`           | `50`         | Open conversations kept; the least recently used is dropped |
+| `APP_SESSION_TTL_MINUTES` | `60`          | `60`         | Idle conversations are dropped after this long            |
+| `APP_MAX_MESSAGE_CHARS`   | `20000`       | `4000`       | Longest message accepted                                  |
+| `GRADIO_SERVER_NAME`      | `127.0.0.1`   | `0.0.0.0`    | Interface to bind                                         |
+| `GRADIO_SERVER_PORT`      | `7860`        | `7860`       | Port to listen on                                         |
+| `GRADIO_SHARE`            | `false`       | `false`      | `true` also publishes a public `*.gradio.live` link       |
+
+When hosting on the internet, put the app behind HTTPS (for example a reverse proxy such as
+Caddy or nginx); the login is sent in plain text otherwise. Tip: set `AGENT_VERBOSITY=0` or `1`
+to keep the server console readable with several users.
 
 ---
 
