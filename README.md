@@ -72,7 +72,7 @@ Developed as an enhanced, fully autonomous implementation of Unit 1 of the Huggi
 - **Automatic Model Fallback**: Set `FALLBACK_MODEL_ID` and requests that fail on the primary model (e.g. Ollama host offline) are retried on the fallback through a LiteLLM Router.
 - **World Time Awareness**: Custom `get_current_time_in_timezone` tool supporting any valid IANA timezone identifier via `pytz`.
 - **Resilient Live Search**: `web_search` tool built on `ddgs` with input validation, timeouts, retries with exponential backoff, multi-backend fallback (DuckDuckGo → auto → Wikipedia) and a result cache, so network failures degrade gracefully instead of crashing the agent.
-- **Tuned Prompt Engineering**: Streamlined `src/ai_agents/prompts.yaml` (88 lines) stripped of hallucinated ghost tools, fully compliant with modern `smolagents` (v1.26+).
+- **Tuned Prompt Engineering**: Streamlined `src/ai_agents/prompts.yaml` stripped of hallucinated ghost tools, fully compliant with modern `smolagents` (v1.26+).
 - **Dual Interfaces**: Interactive terminal CLI (`uv run ai-agents`) and browser chat interface (`uv run python app.py`).
 - **Reproducible Environment**: Built with `uv` for fast dependency resolution and strictly locked virtual environments.
 
@@ -181,6 +181,16 @@ GROQ_API_KEY=gsk_your_groq_api_key_here
 
 The fallback accepts `FALLBACK_MODEL_API_BASE`, `FALLBACK_MODEL_API_KEY` and `FALLBACK_MODEL_NUM_CTX`, mirroring the `MODEL_*` variables. The CLI banner shows the active chain, e.g. `ollama_chat/qwen2.5-coder:7b -> groq/llama-3.3-70b-versatile`.
 
+#### Agent Behaviour
+
+| Variable          | Default | Meaning                                       |
+| :---------------- | :------ | :-------------------------------------------- |
+| `AGENT_MAX_STEPS` | `6`     | Maximum reasoning/tool steps per task         |
+| `AGENT_VERBOSITY` | `2`     | Console log level: 0 = off, 1 = info, 2 = debug |
+
+Invalid values stop the CLI with a `[Config error]` message naming the variable. If the model
+cannot be reached, the CLI prints a short `[Model error]` hint instead of a traceback.
+
 #### Custom Prompts
 
 The agent loads `prompts.yaml` from inside the package, so it works from any directory. To use your own templates, set `PROMPTS_PATH=/path/to/prompts.yaml`.
@@ -218,6 +228,14 @@ uv run python app.py
 ```
 
 Navigate to `http://127.0.0.1:7860` to access the chat UI.
+
+The UI is local-only by default. Optional `.env` settings:
+
+| Variable             | Default     | Meaning                                                        |
+| :------------------- | :---------- | :------------------------------------------------------------- |
+| `GRADIO_SERVER_NAME` | `127.0.0.1` | Interface to bind (`0.0.0.0` exposes it on your network)       |
+| `GRADIO_SERVER_PORT` | `7860`      | Port to listen on                                              |
+| `GRADIO_SHARE`       | `false`     | `true` also publishes a public `*.gradio.live` link - use with care |
 
 ---
 

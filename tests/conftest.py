@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-_CONFIG_PREFIXES = ("MODEL_", "FALLBACK_MODEL_", "SEARCH_", "PROMPTS_PATH")
+_CONFIG_PREFIXES = ("MODEL_", "FALLBACK_MODEL_", "SEARCH_", "AGENT_", "GRADIO_", "PROMPTS_PATH")
 
 
 @pytest.fixture(autouse=True)

@@ -231,3 +231,23 @@ def test_tool_metadata_matches_smolagents_contract():
     assert tool.name == "web_search"
     assert tool.output_type == "string"
     assert set(tool.inputs) == {"query"}
+
+
+def test_backoff_never_sleeps_past_time_budget():
+    clock = FakeClock()
+
+    def failing(timeout):
+        clock.now += 40
+        raise TimeoutError("slow")
+
+    sleeps = []
+    tool = ResilientWebSearchTool(
+        client_factory=failing,
+        sleep=sleeps.append,
+        clock=clock,
+        timeout=10,
+        total_time_budget=45,
+        backoff_base=30,
+    )
+    tool(query="tokyo")
+    assert sleeps == [5]  # 30s backoff clamped to the 5s left in the budget
