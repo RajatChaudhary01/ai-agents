@@ -10,6 +10,8 @@ A modular, production-ready AI Agent built with Hugging Face `smolagents`. Featu
 
 Developed as an enhanced, fully autonomous implementation of Unit 1 of the Hugging Face AI Agents Course.
 
+Originally forked from [lowkey999-netizen/ai-agents](https://github.com/lowkey999-netizen/ai-agents); this repository is now developed independently.
+
 ---
 
 ## System Architecture
@@ -138,7 +140,7 @@ ai-agents/
 ### 2. Clone and Install
 
 ```bash
-git clone https://github.com/lowkey999-netizen/ai-agents.git
+git clone https://github.com/RajatChaudhary01/ai-agents.git
 cd ai-agents
 uv sync
 ```
