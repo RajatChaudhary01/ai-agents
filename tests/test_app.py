@@ -6,7 +6,7 @@ from smolagents import FinalAnswerStep
 from smolagents.utils import AgentGenerationError
 
 from ai_agents import web
-from ai_agents.web import SessionChat, SessionStore, WebConfig, parse_auth
+from ai_agents.web import DirectTools, SessionChat, SessionStore, WebConfig, session_id
 
 
 class FakeRequest:
@@ -115,6 +115,32 @@ def test_model_errors_become_a_chat_message():
     assert "could not generate a response" in out
     assert "connection refused" in out
 
+    hosted = chat_turn(SessionChat(SessionStore(Broken), show_error_details=False), "s", "hi")
+    assert "unavailable right now" in hosted
+    assert "connection refused" not in hosted  # internal details stay in the server log
+
+
+def test_guard_refusal_skips_the_agent():
+    store = SessionStore(FakeAgent)
+    chat = SessionChat(store, guard=lambda request: "Rate limit reached")
+    assert chat_turn(chat, "s", "hi") == "Rate limit reached"
+    assert len(store) == 0
+
+
+def test_sessions_are_namespaced_by_account():
+    request = FakeRequest("tab1")
+    request.username = "alice"
+    assert session_id(request) == "alice:tab1"
+    assert session_id(FakeRequest("tab1")) == "tab1"
+
+
+def test_direct_tools_work_and_respect_guard():
+    tools = DirectTools()
+    assert tools.calculate("2 + 3", FakeRequest("s")) == "5"
+    assert "Asia/Tokyo" in tools.world_clock("Asia/Tokyo", FakeRequest("s"))
+    blocked = DirectTools(guard=lambda request: "slow down")
+    assert blocked.calculate("2 + 3", FakeRequest("s")) == "slow down"
+
 
 # --------------------------------------------------------------------- config
 class TestConfig:
@@ -123,27 +149,20 @@ class TestConfig:
         assert config.host_mode is False
         assert config.server_name == "127.0.0.1"
         assert config.share is False
-        assert config.auth == []
 
-    def test_host_mode_requires_login(self):
-        with pytest.raises(ValueError, match="APP_AUTH"):
-            WebConfig.from_env(host_mode=True)
-
-    def test_host_mode_with_login(self, monkeypatch):
-        monkeypatch.setenv("APP_AUTH", "alice:s3cret, bob:pa:ss")
+    def test_host_mode_defaults(self):
         config = WebConfig.from_env(host_mode=True)
         assert config.server_name == "0.0.0.0"
-        assert config.auth == [("alice", "s3cret"), ("bob", "pa:ss")]
         assert config.concurrency == 4
         assert config.max_sessions == 50
 
-    def test_host_mode_anonymous_opt_in(self, monkeypatch):
-        monkeypatch.setenv("APP_ALLOW_ANONYMOUS", "true")
-        assert WebConfig.from_env(host_mode=True).auth == []
+    def test_share_is_refused_in_host_mode(self, monkeypatch):
+        monkeypatch.setenv("GRADIO_SHARE", "true")
+        with pytest.raises(ValueError, match="GRADIO_SHARE"):
+            WebConfig.from_env(host_mode=True)
 
     def test_app_mode_env_selects_host_mode(self, monkeypatch):
         monkeypatch.setenv("APP_MODE", "host")
-        monkeypatch.setenv("APP_AUTH", "a:b")
         assert WebConfig.from_env().host_mode is True
 
     def test_cli_flag_overrides_env(self, monkeypatch):
@@ -159,15 +178,9 @@ class TestConfig:
         with pytest.raises(ValueError, match=var):
             WebConfig.from_env()
 
-    @pytest.mark.parametrize("raw", ["alice", ":pw", "alice:"])
-    def test_bad_auth_entries(self, raw):
-        with pytest.raises(ValueError, match="user:password"):
-            parse_auth(raw)
-
 
 # --------------------------------------------------------------------- launch
-@pytest.fixture
-def launched(monkeypatch):
+def test_local_launch_is_private(monkeypatch):
     captured = {}
 
     class FakeDemo:
@@ -176,28 +189,19 @@ def launched(monkeypatch):
 
     monkeypatch.setattr(web, "create_app", lambda factory, config: FakeDemo())
     monkeypatch.setattr("ai_agents.agents.create_first_agent", FakeAgent)
-    return captured
-
-
-def test_local_launch_is_private(launched):
     web.main([])
-    assert launched["share"] is False
-    assert launched["server_name"] == "127.0.0.1"
-    assert launched["auth"] is None
+    assert captured == {"server_name": "127.0.0.1", "server_port": 7860, "share": False}
 
 
-def test_host_launch_uses_login(launched, monkeypatch):
-    monkeypatch.setenv("APP_AUTH", "alice:pw")
+def test_host_launch_uses_hosting_server(monkeypatch, tmp_path):
+    served = {}
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setattr("ai_agents.agents.create_first_agent", FakeAgent)
+    monkeypatch.setattr(
+        "ai_agents.hosting.server.serve", lambda factory, config: served.update(config=config)
+    )
     web.main(["--host"])
-    assert launched["server_name"] == "0.0.0.0"
-    assert launched["auth"] == [("alice", "pw")]
-    assert launched["show_error"] is False
-
-
-def test_host_launch_without_login_exits(launched):
-    with pytest.raises(SystemExit, match="APP_AUTH"):
-        web.main(["--host"])
-    assert launched == {}
+    assert served["config"].host_mode is True
 
 
 def test_create_app_builds_a_gradio_app():

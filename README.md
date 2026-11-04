@@ -102,7 +102,12 @@ Developed as an enhanced, fully autonomous implementation of Unit 1 of the Huggi
 ```text
 ai-agents/
 ├── .env.example               # Configuration template for model and API keys
-├── .github/workflows/ci.yml   # PR checks: ruff lint, ruff format, pytest
+├── .github/workflows/ci.yml   # PR checks: ruff, pytest, Docker build, Caddyfile validation
+├── Dockerfile                 # Hosting-mode image (non-root)
+├── deploy/
+│   ├── docker-compose.yml     # App + Caddy (automatic HTTPS), hardened containers
+│   ├── Caddyfile              # Reverse proxy config
+│   └── .env.example           # DOMAIN for Caddy
 ├── LICENSE                    # Apache License 2.0
 ├── app.py                     # Gradio Web UI entry point (wraps ai_agents.web)
 ├── docs/
@@ -113,7 +118,11 @@ ai-agents/
 └── src/
     └── ai_agents/
         ├── __init__.py        # CLI entry point (uv run ai-agents)
-        ├── web.py             # Web UI: per-session agents, local and hosting modes
+        ├── web.py             # Web UI: per-session agents, Tools tab, local/hosting modes
+        ├── hosting/
+        │   ├── accounts.py    # SQLite users and sessions (scrypt password hashes)
+        │   ├── ratelimit.py   # Sliding-window limits, client IP and IPv6 /64 grouping
+        │   └── server.py      # Sign-up/login pages, limits, security headers, Gradio mount
         ├── models.py          # Model factory with optional fallback chain (LiteLLM Router)
         ├── prompts.yaml       # ReAct system prompt and few-shot examples
         ├── agents/
@@ -261,34 +270,125 @@ agent, so separate chats never share memory. Pressing **Clear** starts a fresh c
 
 For your own use: binds to `127.0.0.1`, no login, one request at a time.
 
+You can also use the calculator and world clock directly in the **Tools** tab, without the
+AI model.
+
 #### Hosting mode
 
-For serving other people. Turn it on explicitly with `--host` (or `APP_MODE=host`):
+For serving other people. Turn it on explicitly with `--host` (or `APP_MODE=host`). For a
+public deployment, use the Docker + Caddy setup in [Deploying to the Internet](#deploying-to-the-internet).
 
 ```bash
-APP_AUTH=alice:change-me uv run python app.py --host
+uv run python app.py --host
 ```
 
-Hosting mode listens on all interfaces (`0.0.0.0`), **requires a login** (it refuses to start
-without `APP_AUTH`, so strangers cannot spend your API quota), handles several users in
-parallel, caps open sessions and message length, and hides error tracebacks from visitors.
+What hosting mode adds:
 
-| Variable                  | Local default | Host default | Meaning                                                   |
-| :------------------------ | :------------ | :----------- | :-------------------------------------------------------- |
-| `APP_MODE`                | `local`       | `host`       | Mode when `--host` is not passed                          |
-| `APP_AUTH`                | none          | required     | Logins as `user:password`, comma-separated for several    |
-| `APP_ALLOW_ANONYMOUS`     | -             | `false`      | `true` allows hosting mode without a login (not advised)  |
-| `APP_CONCURRENCY`         | `1`           | `4`          | Requests processed in parallel                            |
+- **Accounts**: visitors sign up and log in at `/signup` and `/login`. Passwords are hashed
+  with scrypt, sessions are random tokens stored only as hashes in SQLite (`APP_DB_PATH`),
+  and cookies are `HttpOnly`, `SameSite=Lax` and `Secure` (`__Host-` prefixed).
+- **Rate limits per account *and* per IP**: every chat message counts against the account
+  and against the client's network, plus a global daily cap that bounds total model spend.
+  Dummy accounts made from one IP share that IP's budget, so mass sign-ups gain nothing;
+  one account hopping between IPs is still held to its account limit.
+- **Sign-up abuse controls**: limited accounts per IP per day, and IPv6 clients are grouped
+  by /64 so rotating addresses inside one allocation does not help.
+- **Brute-force protection**: failed logins are limited per IP and per account.
+- **Hardening**: security headers, cross-site form posts rejected, every Gradio route
+  (including its API) requires a session, uploads capped at 1 MB, model errors hidden from
+  visitors (logged on the server), and no Gradio API docs in the footer.
+
+Manage accounts from the command line (inside Docker: `docker compose -f deploy/docker-compose.yml exec app python app.py users list`):
+
+```bash
+uv run ai-agents-web users list
+```
+
+```bash
+uv run ai-agents-web users add alice
+```
+
+`users passwd <name>`, `users disable <name>` and `users enable <name>` also exist; changing
+a password or disabling an account logs that user out everywhere.
+
+| Variable                              | Default       | Meaning                                                       |
+| :------------------------------------ | :------------ | :------------------------------------------------------------ |
+| `APP_SIGNUP`                          | `open`        | `closed` disables `/signup`; create accounts with `users add` |
+| `APP_DB_PATH`                         | `data/app.db` | SQLite file for accounts and sessions                         |
+| `APP_TRUST_PROXY`                     | `false`       | Read the client IP from `X-Forwarded-For` (only behind a proxy) |
+| `APP_COOKIE_SECURE`                   | `true`        | Secure cookies; set `false` only for plain-http local testing |
+| `APP_MESSAGES_PER_ACCOUNT_PER_HOUR`   | `20`          | Chat messages per account per hour                            |
+| `APP_MESSAGES_PER_ACCOUNT_PER_DAY`    | `100`         | Chat messages per account per day                             |
+| `APP_MESSAGES_PER_IP_PER_HOUR`        | `40`          | Chat messages per IP (all accounts together) per hour         |
+| `APP_MESSAGES_PER_IP_PER_DAY`         | `200`         | Chat messages per IP per day                                  |
+| `APP_MESSAGES_GLOBAL_PER_DAY`         | `2000`        | Chat messages for the whole service per day                   |
+| `APP_TOOL_CALLS_PER_MINUTE`           | `60`          | Tools-tab uses per account per minute (2x per IP)             |
+| `APP_SIGNUPS_PER_IP_PER_DAY`          | `3`           | New accounts per IP per day                                   |
+| `APP_SIGNUP_ATTEMPTS_PER_IP_PER_HOUR` | `10`          | Sign-up form submissions per IP per hour                      |
+| `APP_LOGIN_FAILURES_PER_IP`           | `20`          | Failed logins per IP per 15 minutes                           |
+| `APP_LOGIN_FAILURES_PER_ACCOUNT`      | `10`          | Failed logins per account per 15 minutes                      |
+
+Web UI settings for both modes:
+
+| Variable                  | Local default | Host default | Meaning                                                     |
+| :------------------------ | :------------ | :----------- | :---------------------------------------------------------- |
+| `APP_MODE`                | `local`       | `host`       | Mode when `--host` is not passed                            |
+| `APP_CONCURRENCY`         | `1`           | `4`          | Requests processed in parallel                              |
 | `APP_MAX_SESSIONS`        | `5`           | `50`         | Open conversations kept; the least recently used is dropped |
-| `APP_SESSION_TTL_MINUTES` | `60`          | `60`         | Idle conversations are dropped after this long            |
-| `APP_MAX_MESSAGE_CHARS`   | `20000`       | `4000`       | Longest message accepted                                  |
-| `GRADIO_SERVER_NAME`      | `127.0.0.1`   | `0.0.0.0`    | Interface to bind                                         |
-| `GRADIO_SERVER_PORT`      | `7860`        | `7860`       | Port to listen on                                         |
-| `GRADIO_SHARE`            | `false`       | `false`      | `true` also publishes a public `*.gradio.live` link       |
+| `APP_SESSION_TTL_MINUTES` | `60`          | `60`         | Idle conversations are dropped after this long              |
+| `APP_MAX_MESSAGE_CHARS`   | `20000`       | `4000`       | Longest message accepted                                    |
+| `GRADIO_SERVER_NAME`      | `127.0.0.1`   | `0.0.0.0`    | Interface to bind                                           |
+| `GRADIO_SERVER_PORT`      | `7860`        | `7860`       | Port to listen on                                           |
+| `GRADIO_SHARE`            | `false`       | not allowed  | `true` also publishes a public `*.gradio.live` link         |
 
-When hosting on the internet, put the app behind HTTPS (for example a reverse proxy such as
-Caddy or nginx); the login is sent in plain text otherwise. Tip: set `AGENT_VERBOSITY=0` or `1`
-to keep the server console readable with several users.
+Rate-limit counters live in memory and reset when the server restarts. Tip: set
+`AGENT_VERBOSITY=0` or `1` to keep the server console readable with several users.
+
+---
+
+## Deploying to the Internet
+
+`deploy/` runs the app in hosting mode behind [Caddy](https://caddyserver.com/), which
+obtains and renews HTTPS certificates from Let's Encrypt automatically.
+
+1. Point a domain's DNS `A`/`AAAA` record at your server and open ports **80** and **443**
+   (and nothing else except SSH).
+2. Configure:
+   ```bash
+   cp .env.example .env
+   ```
+   ```bash
+   cp deploy/.env.example deploy/.env
+   ```
+   Set `DOMAIN` in `deploy/.env`; set your model, API keys and any `APP_*` limits in `.env`.
+   To use Ollama on the same machine, set `MODEL_API_BASE=http://host.docker.internal:11434`
+   and make Ollama listen beyond localhost (`OLLAMA_HOST=0.0.0.0`, firewalled from the internet).
+3. Start it:
+   ```bash
+   docker compose -f deploy/docker-compose.yml up -d --build
+   ```
+4. Open `https://your-domain/`, sign up, and check the logs:
+   ```bash
+   docker compose -f deploy/docker-compose.yml logs -f
+   ```
+
+How the pieces fit:
+
+- Only Caddy publishes ports. The app container has none, so it can only be reached through
+  Caddy; that is what makes `APP_TRUST_PROXY=true` safe. Caddy *replaces* any client-sent
+  `X-Forwarded-For`, so spoofing it cannot dodge the per-IP limits.
+- Caddy redirects HTTP to HTTPS, adds HSTS and rejects request bodies over 2 MB.
+- The app container runs as an unprivileged user on a read-only filesystem with all Linux
+  capabilities dropped, `no-new-privileges`, and memory/process limits.
+- Accounts live in the `app-data` volume and certificates in `caddy-data`. Back up
+  `app-data`, for example:
+  ```bash
+  docker compose -f deploy/docker-compose.yml exec app python -c "import sqlite3; sqlite3.connect('/data/app.db').backup(sqlite3.connect('/data/backup.db'))"
+  ```
+
+Behind Cloudflare or another CDN, every request appears to come from the CDN, so per-IP
+limits would lump all users together: configure Caddy's `trusted_proxies` and read the
+CDN's client-IP header first.
 
 ---
 
@@ -343,11 +443,15 @@ Both jobs install from `uv.lock` with `--locked`, so CI fails if the lockfile is
 
 ## Security Model
 
-Arbitrary code execution is strictly restricted. The agent runs within `smolagents`'s AST interpreter, ensuring:
-
-- Only whitelisted imports and functions can be invoked.
-- File system and shell access are blocked by default.
-- Custom tools perform strict type and input validation before execution.
+- **Calculator**: parses with `ast.parse`, whitelists syntax and names, evaluates the tree
+  itself (no `eval`) and caps result size, so it cannot run code or hang the process.
+- **Agent code**: the model's code runs in smolagents' `LocalPythonExecutor`, which only
+  allows whitelisted imports and has operation, loop and time limits. It is a best-effort
+  guard, **not a security sandbox**; a determined user may find an escape. When hosting for
+  strangers, the Docker setup limits the damage (unprivileged user, read-only filesystem, no
+  capabilities, resource limits), but the container still holds your API keys. For stronger
+  isolation, smolagents supports remote executors such as Docker or E2B (`executor_type`).
+- **Hosting mode**: see [Hosting mode](#hosting-mode) for accounts, rate limits and headers.
 
 ---
 

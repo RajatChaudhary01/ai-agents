@@ -24,3 +24,6 @@ dist/
 .coverage
 coverage.xml
 htmlcov/
+
+# Hosting-mode accounts database (local runs)
+data/
