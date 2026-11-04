@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "My Journey to learn Agents."
 readme = "README.md"
 authors = [
-    { name = "Bhargava Shanmukha", email = "shanmukhabhargava0@gmail.com" }
+    { name = "Rajat Chaudhary", email = "rajatchaudharycloud01@gmail.com" }
 ]
 requires-python = ">=3.12"
 dependencies = [

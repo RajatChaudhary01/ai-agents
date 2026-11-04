@@ -80,3 +80,21 @@ def test_system_prompt_uses_agent_code_block_tags():
     assert opening in prompt
     assert closing in prompt
     assert "{{" not in prompt
+
+
+def test_agent_settings_from_env(monkeypatch):
+    monkeypatch.setenv("AGENT_MAX_STEPS", "3")
+    monkeypatch.setenv("AGENT_VERBOSITY", "0")
+    agent = create_first_agent()
+    assert agent.max_steps == 3
+    assert agent.logger.level == 0
+
+
+@pytest.mark.parametrize(
+    ("var", "value"),
+    [("AGENT_MAX_STEPS", "0"), ("AGENT_MAX_STEPS", "x"), ("AGENT_VERBOSITY", "5")],
+)
+def test_invalid_agent_env_has_clear_error(monkeypatch, var, value):
+    monkeypatch.setenv(var, value)
+    with pytest.raises(ValueError, match=var):
+        create_first_agent()

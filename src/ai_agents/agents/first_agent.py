@@ -12,6 +12,9 @@ from ai_agents.tools import ResilientWebSearchTool, calculate, get_current_time_
 # Automatically load environment variables from .env if present
 load_dotenv()
 
+DEFAULT_MAX_STEPS = 6
+DEFAULT_VERBOSITY = 2  # 0 = off, 1 = info, 2 = debug
+
 
 def load_prompt_templates() -> dict:
     """Load the agent's prompt templates.
@@ -39,6 +42,24 @@ def _env_number(name: str, cast: type[int] | type[float]) -> int | float | None:
         return cast(raw)
     except ValueError:
         raise ValueError(f"{name} must be a {cast.__name__}, got {raw!r}") from None
+
+
+def _max_steps_from_env() -> int:
+    steps = _env_number("AGENT_MAX_STEPS", int)
+    if steps is None:
+        return DEFAULT_MAX_STEPS
+    if steps < 1:
+        raise ValueError(f"AGENT_MAX_STEPS must be at least 1, got {steps}")
+    return steps
+
+
+def _verbosity_from_env() -> int:
+    level = _env_number("AGENT_VERBOSITY", int)
+    if level is None:
+        return DEFAULT_VERBOSITY
+    if not 0 <= level <= 2:
+        raise ValueError(f"AGENT_VERBOSITY must be 0, 1 or 2, got {level}")
+    return level
 
 
 def _build_search_tool() -> ResilientWebSearchTool:
@@ -69,8 +90,8 @@ def create_first_agent() -> CodeAgent:
     agent = CodeAgent(
         tools=tools,
         model=model,
-        max_steps=6,
-        verbosity_level=2,
+        max_steps=_max_steps_from_env(),
+        verbosity_level=_verbosity_from_env(),
         prompt_templates=load_prompt_templates(),
     )
 

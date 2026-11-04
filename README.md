@@ -69,10 +69,10 @@ Developed as an enhanced, fully autonomous implementation of Unit 1 of the Huggi
 
 - **Universal Model Portability**: Fully decoupled from hardcoded endpoints. Switch between offline local execution (`Ollama` + `qwen2.5-coder` or `qwen-coder-14b`) and ultra-fast cloud LPUs (`Groq` + `qwen3.8-27b`) by updating a single variable in `.env`.
 - **AST-Sandboxed Math Calculator**: Built-in `calculate` tool that parses with `ast.parse`, whitelists nodes and identifiers, and evaluates the tree itself (no `eval`). Integer results are capped at 4000 digits and `factorial`/`comb`/`perm` arguments at 10,000, so inputs like `9**9**9` are rejected instantly instead of freezing the agent.
-- **Automatic Model Fallback**: Set `FALLBACK_MODEL_ID` and requests that fail on the primary model (e.g. Ollama host offline) are retried on the fallback through a LiteLLM Router.
+- **Automatic Model Fallback Chain**: Set `FALLBACK_MODEL_ID` (and optionally `FALLBACK_MODEL_2_ID` ... `FALLBACK_MODEL_9_ID`) and requests that fail on the primary model (e.g. Ollama host offline, free-tier rate limit) move down the chain through a LiteLLM Router.
 - **World Time Awareness**: Custom `get_current_time_in_timezone` tool supporting any valid IANA timezone identifier via `pytz`.
 - **Resilient Live Search**: `web_search` tool built on `ddgs` with input validation, timeouts, retries with exponential backoff, multi-backend fallback (DuckDuckGo → auto → Wikipedia) and a result cache, so network failures degrade gracefully instead of crashing the agent.
-- **Tuned Prompt Engineering**: Streamlined `src/ai_agents/prompts.yaml` (88 lines) stripped of hallucinated ghost tools, fully compliant with modern `smolagents` (v1.26+).
+- **Tuned Prompt Engineering**: Streamlined `src/ai_agents/prompts.yaml` stripped of hallucinated ghost tools, fully compliant with modern `smolagents` (v1.26+).
 - **Dual Interfaces**: Interactive terminal CLI (`uv run ai-agents`) and browser chat interface (`uv run python app.py`).
 - **Reproducible Environment**: Built with `uv` for fast dependency resolution and strictly locked virtual environments.
 
@@ -103,6 +103,7 @@ Developed as an enhanced, fully autonomous implementation of Unit 1 of the Huggi
 ai-agents/
 ├── .env.example               # Configuration template for model and API keys
 ├── .github/workflows/ci.yml   # PR checks: ruff lint, ruff format, pytest
+├── LICENSE                    # Apache License 2.0
 ├── app.py                     # Gradio Web UI entry point
 ├── docs/
 │   └── images/                # Execution screenshots
@@ -112,7 +113,7 @@ ai-agents/
 └── src/
     └── ai_agents/
         ├── __init__.py        # CLI entry point (uv run ai-agents)
-        ├── models.py          # Model factory with optional fallback (LiteLLM Router)
+        ├── models.py          # Model factory with optional fallback chain (LiteLLM Router)
         ├── prompts.yaml       # ReAct system prompt and few-shot examples
         ├── agents/
         │   ├── __init__.py    # Agent package exports
@@ -168,18 +169,49 @@ MODEL_ID=groq/qwen/qwen3.8-27b
 GROQ_API_KEY=gsk_your_groq_api_key_here
 ```
 
-#### Local First, Cloud Fallback
+#### Local First, Cloud Fallback Chain
 
-Use Ollama normally and fall back to Groq automatically when the Ollama host is unreachable or errors:
+Use Ollama normally and fall through a chain of free-tier cloud APIs when it is offline or a
+provider is rate-limited. Models are tried in order: `FALLBACK_MODEL_*`, then
+`FALLBACK_MODEL_2_*` up to `FALLBACK_MODEL_9_*` (gaps are allowed).
 
 ```env
 MODEL_ID=ollama_chat/qwen2.5-coder:7b
 MODEL_API_BASE=http://127.0.0.1:11434
+
 FALLBACK_MODEL_ID=groq/llama-3.3-70b-versatile
+FALLBACK_MODEL_2_ID=gemini/gemini-2.5-flash
+FALLBACK_MODEL_3_ID=openrouter/meta-llama/llama-3.3-70b-instruct:free
+
 GROQ_API_KEY=gsk_your_groq_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 ```
 
-The fallback accepts `FALLBACK_MODEL_API_BASE`, `FALLBACK_MODEL_API_KEY` and `FALLBACK_MODEL_NUM_CTX`, mirroring the `MODEL_*` variables. The CLI banner shows the active chain, e.g. `ollama_chat/qwen2.5-coder:7b -> groq/llama-3.3-70b-versatile`.
+Each slot accepts `_API_BASE`, `_API_KEY` and `_NUM_CTX`, mirroring the `MODEL_*` variables;
+without `_API_KEY`, LiteLLM uses the provider's own variable. Duplicate models are skipped.
+The CLI banner shows the active chain, e.g.
+`ollama_chat/qwen2.5-coder:7b -> groq/llama-3.3-70b-versatile -> gemini/gemini-2.5-flash`.
+
+| Provider   | Model prefix   | API key variable     | Free tier                         |
+| :--------- | :------------- | :------------------- | :-------------------------------- |
+| Groq       | `groq/`        | `GROQ_API_KEY`       | Yes, rate-limited                 |
+| Gemini     | `gemini/`      | `GEMINI_API_KEY`     | Yes, via Google AI Studio         |
+| Cerebras   | `cerebras/`    | `CEREBRAS_API_KEY`   | Yes, rate-limited                 |
+| OpenRouter | `openrouter/`  | `OPENROUTER_API_KEY` | Models ending in `:free`          |
+| Mistral    | `mistral/`     | `MISTRAL_API_KEY`    | Yes, on the free "Experiment" plan |
+
+Model names and free-tier limits change often; check each provider's model list.
+
+#### Agent Behaviour
+
+| Variable          | Default | Meaning                                       |
+| :---------------- | :------ | :-------------------------------------------- |
+| `AGENT_MAX_STEPS` | `6`     | Maximum reasoning/tool steps per task         |
+| `AGENT_VERBOSITY` | `2`     | Console log level: 0 = off, 1 = info, 2 = debug |
+
+Invalid values stop the CLI with a `[Config error]` message naming the variable. If the model
+cannot be reached, the CLI prints a short `[Model error]` hint instead of a traceback.
 
 #### Custom Prompts
 
@@ -218,6 +250,14 @@ uv run python app.py
 ```
 
 Navigate to `http://127.0.0.1:7860` to access the chat UI.
+
+The UI is local-only by default. Optional `.env` settings:
+
+| Variable             | Default     | Meaning                                                        |
+| :------------------- | :---------- | :------------------------------------------------------------- |
+| `GRADIO_SERVER_NAME` | `127.0.0.1` | Interface to bind (`0.0.0.0` exposes it on your network)       |
+| `GRADIO_SERVER_PORT` | `7860`      | Port to listen on                                              |
+| `GRADIO_SHARE`       | `false`     | `true` also publishes a public `*.gradio.live` link - use with care |
 
 ---
 
@@ -282,4 +322,4 @@ Arbitrary code execution is strictly restricted. The agent runs within `smolagen
 
 ## License
 
-This project is licensed under the Apache 2.0 License.
+This project is licensed under the Apache 2.0 License. See [LICENSE](LICENSE).

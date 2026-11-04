@@ -174,7 +174,11 @@ class ResilientWebSearchTool(Tool):
                         "web_search backend=%s attempt=%d failed: %r", backend, attempt, exc
                     )
                     if is_transient_error(exc) and attempt < self.max_attempts_per_backend:
-                        self._sleep(self.backoff_base * 2 ** (attempt - 1))
+                        # Never sleep past the overall time budget.
+                        remaining = self.total_time_budget - (self._clock() - start)
+                        delay = min(self.backoff_base * 2 ** (attempt - 1), max(0.0, remaining))
+                        if delay:
+                            self._sleep(delay)
                         continue
                     break  # non-transient error or retries exhausted: next backend
 
