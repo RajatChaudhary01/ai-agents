@@ -1,0 +1,28 @@
+# Secrets and local settings (the templates are tracked)
+.env
+.env.*
+!.env.example
+
+# Local state written by the app
+# data/ holds the hosting-mode accounts database
+data/
+.gradio/
+
+# Python build output and bytecode
+__pycache__/
+*.py[oc]
+*.egg-info/
+build/
+dist/
+
+# Environments, tool caches and coverage
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editors
+.vscode/
+.agents/

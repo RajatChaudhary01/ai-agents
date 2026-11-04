@@ -1,0 +1,31 @@
+# Caddy reverse proxy: automatic HTTPS (Let's Encrypt) in front of the agent.
+# DOMAIN comes from deploy/.env, e.g. DOMAIN=agent.example.com. Its DNS A/AAAA record
+# must point at this server, and ports 80 and 443 must be open, for the certificate.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Chat messages are small; refuse oversized bodies before they reach the app.
+	request_body {
+		max_size 2MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+		-X-Powered-By
+	}
+
+	reverse_proxy app:7860 {
+		# Replace (never append to) X-Forwarded-For with the address Caddy actually sees,
+		# so clients cannot spoof their IP to dodge the per-IP rate limits.
+		header_up X-Forwarded-For {remote_host}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

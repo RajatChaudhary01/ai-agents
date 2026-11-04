@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Ruff lint
+        run: uv run --locked --only-group dev ruff check --output-format=github .
+
+      - name: Ruff format check
+        run: uv run --locked --only-group dev ruff format --check --diff .
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Run tests
+        run: uv run --no-sync pytest --cov=ai_agents --cov-report=term-missing
+
+  docker:
+    name: Docker image & deploy config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t ai-agents-app:ci .
+
+      - name: Smoke test hosting mode
+        run: |
+          docker run -d --name app --read-only --tmpfs /tmp --cap-drop ALL -v app-data:/data \
+            -e MODEL_ID=groq/test-model -e GROQ_API_KEY=not-a-real-key \
+            ai-agents-app:ci
+          for i in $(seq 1 45); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' app)" = healthy ] && break
+            sleep 2
+          done
+          docker logs app
+          docker inspect -f '{{.State.Health.Status}}' app | grep -qx healthy
+          docker exec app python app.py users list
+
+      - name: Validate Caddyfile
+        run: |
+          docker run --rm -e DOMAIN=example.com \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile
+
+      - name: Validate compose file
+        run: |
+          touch .env deploy/.env
+          docker compose -f deploy/docker-compose.yml config -q
